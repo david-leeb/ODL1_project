@@ -426,7 +426,7 @@ if __name__ == "__main__":
 
     # Define rho values to test
     #rho_values = [1, 5, 10, 20, 50]
-    rho_values = list(range(5, 21))
+    rho_values = list(range(1, 50))
 
     # Loop through multiple rho values to find the best one
     for rho in rho_values:
@@ -455,8 +455,8 @@ if __name__ == "__main__":
     plt.ylabel("Average SNR (dB)")
     plt.title("Average SNR vs Rho")
     plt.grid(True)
-    plt.show()
     plt.savefig("Average_SNR_vs_Rho.pdf")
+    plt.show()
 
     # Plot Average SSIM
     plt.figure()
@@ -465,8 +465,8 @@ if __name__ == "__main__":
     plt.ylabel("Average SSIM")
     plt.title("Average SSIM vs Rho")
     plt.grid(True)
-    plt.show()
     plt.savefig("Average_SSIM_vs_Rho.pdf")
+    plt.show()
 
     # img = np.array(Image.open(img_file)).astype(np.float32)
     # img = torch.tensor(img, dtype=torch.float32, device=device)
