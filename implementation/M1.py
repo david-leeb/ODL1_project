@@ -25,7 +25,6 @@ import skimage.metrics as metrics
 # measurement operator. The acquired Fourier data consist in the masked
 # Fourier transform of the groundtruth, to which noise is added.
 
-
 # Function for creating the Fourier mask
 def create_mask(N1: int, N2: int) -> torch.Tensor:
     """
@@ -387,60 +386,6 @@ def admm_conbpdn(
 
     return xsol, fval, t
 
-def run_admm(img_file, spread_spectrum=False, rho=1e2):
-    img = np.array(Image.open(img_file)).astype(np.float32)
-    img = torch.tensor(img, dtype=torch.float32, device=device)
-
-    # Create a Fourier mask
-    mask = create_mask(*img.shape).to(device)
-    
-    # Apply spread spectrum if required
-    if spread_spectrum:
-        # Create diagonal spread spectrum matrix D and measurement operators
-        D = 2 * (torch.rand(*img.shape, device=device).T < 0.5).to(dtype=img.dtype) - 1
-        Phit, Phi = create_spread_spectrum_meas_op(mask, D)
-    else:
-        Phit, Phi = create_meas_op(mask)
-
-    # Compute the measurements with forward measurement operator Phit
-    y0 = Phit(img)
-
-    # Compute noise given the image, mask, and iSNR
-    noise, sigma = gen_noise(img, mask)
-
-    # Add the noise to the measurements
-    y = y0 + noise
-    M = y.numel()
-
-    # Generate the sparsity operator
-    Psit, Psi = gen_sparsity_op()
-
-    # For imposing the constraint on the data-fidelity term, you will use
-    # following value of the epsilon parameter.
-    epsilon = sigma * np.sqrt(M + 2 * np.sqrt(M))
-
-    # Reconstruct the image by calling our ADMM implementation
-    xsol, fval, it = admm_conbpdn(
-        y,
-        epsilon,
-        Phit,
-        Phi,
-        Psit,
-        Psi,
-        verbose=0,
-        rel_tol=1e-4,
-        rel_tol2=1e-4,
-        max_iter=200,
-        rho=rho,
-        delta=1.0,
-    )
-
-    # Calculate SNR and SSIM of the reconstructed image
-    snr = rsnr(xsol.cpu().numpy(), img.cpu().numpy())
-    ssim = metrics.structural_similarity(img.cpu().numpy(), xsol.cpu().numpy(), data_range=(img.max() - img.min()).item())
-
-    return xsol, snr, ssim
-
 # %% 4. M1 validation
 
 # You will validate your implementation on the images provided in the
@@ -474,113 +419,62 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"Testing set directory not found: {testing_set_dir}")
     testing_files = [os.path.join(testing_set_dir, f) for f in os.listdir(testing_set_dir)]
 
-    # Initialize lists to store overall SNR and SSIM results
-    overall_snr_list = []
-    overall_ssim_list = []
+    img = np.array(Image.open(testing_files[0])).astype(np.float32)
+    img = torch.tensor(img, dtype=torch.float32, device=device)
 
-    # Define rho values to test
-    #rho_values = [1, 5, 10, 20, 50]
-    #rho_values = list(range(1, 50))
-    rho_values = [10]
+    # Create a Fourier mask
+    mask = create_mask(*img.shape).to(device)
+    Phit, Phi = create_meas_op(mask)
 
+    # Compute the measurements with forward measurement operator Phit
+    y0 = Phit(img)
 
-    # Loop through multiple rho values to find the best one
-    for rho in rho_values:
-        print(f"\nRunning ADMM with rho = {rho}")
+    # Compute noise given the image, mask, and iSNR
+    noise, sigma = gen_noise(img, mask)
 
-        # Initialize lists to store per run results
-        snr_list = []
-        ssim_list = []
+    # Add the noise to the measurements
+    y = y0 + noise
+    M = y.numel()
 
-        # Loop through all images in the testing set with a progress bar
-        for img_file in tqdm.tqdm(testing_files[0:1], desc=f"Processing (rho={rho})", unit="img"):
-            xsol, snr, ssim = run_admm(img_file, spread_spectrum=True, rho=rho)
-
-            # Append results to the lists
-            snr_list.append(snr)
-            ssim_list.append(ssim)
-
-        # Store average SNR and SSIM
-        overall_snr_list.append(np.mean(snr_list))
-        overall_ssim_list.append(np.mean(ssim_list))
-
-    # Plot Average SNR
+    # In order to visualise the measurements in the image domain, you can apply
+    # the adjoint of the measurement operator then take the real part. The
+    # resulting image is called the backprojected image.
+    y_bp = Phi(y)
     plt.figure()
-    plt.plot(rho_values, overall_snr_list, marker="o", linestyle="-")
-    plt.xlabel("Rho")
-    plt.ylabel("Average SNR (dB)")
-    plt.title("Average SNR vs Rho")
-    plt.grid(True)
-    #plt.savefig("Average_SNR_vs_Rho.pdf")
+    plt.imshow(y_bp.cpu().numpy(), cmap="gray")
+    plt.title("Backprojected image")
     plt.show()
 
-    # Plot Average SSIM
+    # Generate the sparsity operator
+    Psit, Psi = gen_sparsity_op()
+
+    # For imposing the constraint on the data-fidelity term, you will use
+    # following value of the epsilon parameter.
+    epsilon = sigma * np.sqrt(M + 2 * np.sqrt(M))
+
+    # Reconstruct the image by calling our ADMM implementation
+    xsol, fval, it = admm_conbpdn(
+        y,
+        epsilon,
+        Phit,
+        Phi,
+        Psit,
+        Psi,
+        verbose=1,
+        rel_tol=1e-4,
+        rel_tol2=1e-4,
+        max_iter=200,
+        rho=1e2,
+        delta=1.0,
+    )
+
+    # Calculate SNR and SSIM of the reconstructed image
+    snr = rsnr(xsol.cpu().numpy(), img.cpu().numpy())
+    ssim = metrics.structural_similarity(img.cpu().numpy(), xsol.cpu().numpy(), data_range=(img.max() - img.min()).item())
+
+    # Show and save the reconstructed image
     plt.figure()
-    plt.plot(rho_values, overall_ssim_list, marker="s", linestyle="-")
-    plt.xlabel("Rho")
-    plt.ylabel("Average SSIM")
-    plt.title("Average SSIM vs Rho")
-    plt.grid(True)
-    #plt.savefig("Average_SSIM_vs_Rho.pdf")
+    plt.imshow(xsol.cpu().numpy(), cmap="gray")
+    plt.title("Reconstructed image - SNR: %.2f dB - SSIM: %.4f" % (snr, ssim))
+    plt.axis("off")
     plt.show()
-
-    # img = np.array(Image.open(img_file)).astype(np.float32)
-    # img = torch.tensor(img, dtype=torch.float32, device=device)
-
-    # # Create a Fourier mask
-    # mask = create_mask(*img.shape).to(device)
-    # Phit, Phi = create_meas_op(mask)
-
-    # # Compute the measurements with forward measurement operator Phit
-    # y0 = Phit(img)
-
-    # # Compute noise given the image, mask, and iSNR
-    # noise, sigma = gen_noise(img, mask)
-
-    # # Add the noise to the measurements
-    # y = y0 + noise
-    # M = y.numel()
-
-    # # In order to visualise the measurements in the image domain, you can apply
-    # # the adjoint of the measurement operator then take the real part. The
-    # # resulting image is called the backprojected image.
-    # # y_bp = Phi(y)
-    # # plt.figure()
-    # # plt.imshow(y_bp.cpu().numpy(), cmap="gray")
-    # # plt.title("Backprojected image")
-    # # plt.show()
-
-    # # Generate the sparsity operator
-    # Psit, Psi = gen_sparsity_op()
-
-    # # For imposing the constraint on the data-fidelity term, you will use
-    # # following value of the epsilon parameter.
-    # epsilon = sigma * np.sqrt(M + 2 * np.sqrt(M))
-
-    # # Reconstruct the image by calling our ADMM implementation
-    # xsol, fval, it = admm_conbpdn(
-    #     y,
-    #     epsilon,
-    #     Phit,
-    #     Phi,
-    #     Psit,
-    #     Psi,
-    #     verbose=1,
-    #     rel_tol=1e-4,
-    #     rel_tol2=1e-4,
-    #     max_iter=200,
-    #     rho=1e2,
-    #     delta=1.0,
-    # )
-
-    # # Calculate SNR and SSIM of the reconstructed image
-    # snr = rsnr(xsol.cpu().numpy(), img.cpu().numpy())
-    # ssim = metrics.structural_similarity(img.cpu().numpy(), xsol.cpu().numpy(), data_range=(img.max() - img.min()).item())
-
-    # # Show and save the reconstructed image
-    # # plt.figure()
-    # # plt.imshow(xsol.cpu().numpy(), cmap="gray")
-    # # plt.title("Reconstructed image - SNR: %.2f dB - SSIM: %.4f" % (snr, ssim))
-    # # plt.axis("off")
-    # # plt.savefig("reconstructed_image.png")
-    # # plt.show()
