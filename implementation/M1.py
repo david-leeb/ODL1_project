@@ -103,6 +103,53 @@ def create_meas_op(mask: torch.Tensor) -> tuple[Callable, Callable]:
 
     return Phit, Phi
 
+# Create the measurement operators
+def create_spread_spectrum_meas_op(mask: torch.Tensor, D: torch.Tensor) -> tuple[Callable, Callable]:
+    """
+    Create the measurement operators
+
+    :param mask: Fourier mask
+    :type mask: torch.Tensor
+    :param D: diagonal spread spectrum matrix
+    :type D: torch.Tensor
+    :return: measurement operators
+    :rtype: tuple[Callable, Callable]
+    """
+
+    # Adjoint measurement operator
+    def Phit(x: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the adjoint measurement operator
+
+        :param x: input signal
+        :type x: torch.Tensor
+        :param mask: Fourier mask
+        :type mask: torch.Tensor
+        :return: measurements in Fourier domain
+        :rtype: torch.Tensor
+        """
+        return ifftshift(mask * fftshift(fft2(D * x))).ravel() / np.sqrt(x.numel())
+
+    # Forward measurement operator
+    def Phi(x: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the forward measurement operator
+
+        :param x: input signal
+        :type x: torch.Tensor
+        :param mask: Fourier mask
+        :type mask: torch.Tensor
+        :return: back-projected measurements in image domain
+        :rtype: torch.Tensor
+        """
+
+        return (
+            D * ifft2(ifftshift(mask * fftshift(x.reshape(mask.shape))))
+            * np.sqrt(x.numel())
+        ).real
+
+    return Phit, Phi
+
 
 # generate noise vector in Fourier domain
 def gen_noise(
@@ -340,13 +387,20 @@ def admm_conbpdn(
 
     return xsol, fval, t
 
-def run_admm(img_file, rho=1e2):
+def run_admm(img_file, spread_spectrum=False, rho=1e2):
     img = np.array(Image.open(img_file)).astype(np.float32)
     img = torch.tensor(img, dtype=torch.float32, device=device)
 
     # Create a Fourier mask
     mask = create_mask(*img.shape).to(device)
-    Phit, Phi = create_meas_op(mask)
+    
+    # Apply spread spectrum if required
+    if spread_spectrum:
+        # Create diagonal spread spectrum matrix D and measurement operators
+        D = 2 * (torch.rand(*img.shape, device=device).T < 0.5).to(dtype=img.dtype) - 1
+        Phit, Phi = create_spread_spectrum_meas_op(mask, D)
+    else:
+        Phit, Phi = create_meas_op(mask)
 
     # Compute the measurements with forward measurement operator Phit
     y0 = Phit(img)
@@ -426,7 +480,9 @@ if __name__ == "__main__":
 
     # Define rho values to test
     #rho_values = [1, 5, 10, 20, 50]
-    rho_values = list(range(1, 50))
+    #rho_values = list(range(1, 50))
+    rho_values = [10]
+
 
     # Loop through multiple rho values to find the best one
     for rho in rho_values:
@@ -437,8 +493,8 @@ if __name__ == "__main__":
         ssim_list = []
 
         # Loop through all images in the testing set with a progress bar
-        for img_file in tqdm.tqdm(testing_files, desc=f"Processing (rho={rho})", unit="img"):
-            xsol, snr, ssim = run_admm(img_file, rho=rho)
+        for img_file in tqdm.tqdm(testing_files[0:1], desc=f"Processing (rho={rho})", unit="img"):
+            xsol, snr, ssim = run_admm(img_file, spread_spectrum=True, rho=rho)
 
             # Append results to the lists
             snr_list.append(snr)
@@ -455,7 +511,7 @@ if __name__ == "__main__":
     plt.ylabel("Average SNR (dB)")
     plt.title("Average SNR vs Rho")
     plt.grid(True)
-    plt.savefig("Average_SNR_vs_Rho.pdf")
+    #plt.savefig("Average_SNR_vs_Rho.pdf")
     plt.show()
 
     # Plot Average SSIM
@@ -465,7 +521,7 @@ if __name__ == "__main__":
     plt.ylabel("Average SSIM")
     plt.title("Average SSIM vs Rho")
     plt.grid(True)
-    plt.savefig("Average_SSIM_vs_Rho.pdf")
+    #plt.savefig("Average_SSIM_vs_Rho.pdf")
     plt.show()
 
     # img = np.array(Image.open(img_file)).astype(np.float32)
@@ -528,5 +584,3 @@ if __name__ == "__main__":
     # # plt.axis("off")
     # # plt.savefig("reconstructed_image.png")
     # # plt.show()
-
-
