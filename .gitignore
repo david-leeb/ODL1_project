@@ -1,6 +1,7 @@
 /.DS_Store
 /testing_set
 /training_set
+/training_set_dirty
 /__pycache__/
 *.pyc
 /implementation/sync

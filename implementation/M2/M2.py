@@ -19,7 +19,11 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from implementation.M1.M1 import create_meas_op, gen_noise, create_mask
+# append parent directory to the system path to import M1 functions
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from M1.M1 import create_meas_op, gen_noise, create_mask
 
 # %% Section 1: Generate backprojected data
 
@@ -44,23 +48,23 @@ def gen_backprojected_image(path_gdth: str, path_dirty: str, isnr: float = 30):
     list_gdth_files = glob.glob(os.path.join(path_gdth, "*.tiff"))
     if not os.path.exists(path_dirty):
         os.makedirs(path_dirty)
-    for gdth_file in list_gdth_files:
-        # Load the ground truth image
-        gdth = np.array(Image.open(gdth_file)).astype(np.float32)
-        gdth = torch.tensor(gdth, dtype=torch.float32)
+        for gdth_file in list_gdth_files:
+            # Load the ground truth image
+            gdth = np.array(Image.open(gdth_file)).astype(np.float32)
+            gdth = torch.tensor(gdth, dtype=torch.float32)
 
-        # Generate backprojected image
-        N1, N2 = gdth.shape
-        mask = create_mask(N1, N2)
-        noise, _ = gen_noise(gdth, mask, isnr)
-        Phit, Phi = create_meas_op(mask)
-        y = Phit(gdth) + noise
-        bp_y = Phi(y)
+            # Generate backprojected image
+            N1, N2 = gdth.shape
+            mask = create_mask(N1, N2)
+            noise, _ = gen_noise(gdth, mask, isnr)
+            Phit, Phi = create_meas_op(mask)
+            y = Phit(gdth) + noise
+            bp_y = Phi(y)
 
-        # Save the backprojected image
-        gdth_name = os.path.basename(gdth_file)
-        dirty_file = os.path.join(path_dirty, gdth_name)
-        Image.fromarray(bp_y.numpy()).save(dirty_file)
+            # Save the backprojected image
+            gdth_name = os.path.basename(gdth_file)
+            dirty_file = os.path.join(path_dirty, gdth_name)
+            Image.fromarray(bp_y.numpy()).save(dirty_file)
 
 
 # %% Section 2: Create Dataset class for training
@@ -124,7 +128,7 @@ class M2Dataset(Dataset):
 
 # A typical U-net architecture consists of two main parts: the down-sampling
 # part and the up-sampling part. The down-sampling part can been seen as a series
-# of blocks, each block containing a max-pooling layer followed by two parirs of convolutional
+# of blocks, each block containing a max-pooling layer followed by two pairs of convolutional
 # layers with ReLU Layer.
 class UNetDownBlock(torch.nn.Module):
     """
@@ -135,6 +139,11 @@ class UNetDownBlock(torch.nn.Module):
         super().__init__()
         self.conv_block = torch.nn.Sequential(
             # add proper layers here
+            torch.nn.MaxPool2d(kernel_size=2, stride=2),
+            torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            torch.nn.ReLU(inplace=True),
+            torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            torch.nn.ReLU(inplace=True)
         )
 
     def forward(self, x_in: torch.Tensor):
@@ -156,9 +165,15 @@ class UNetUpBlock(torch.nn.Module):
         super().__init__()
         self.up_block = torch.nn.Sequential(
             # add proper layers here
+            torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
+            torch.nn.ReLU(inplace=True)
         )
         self.conv_block = torch.nn.Sequential(
             # add proper layers here
+            torch.nn.Conv2d(2 * out_channels, out_channels, kernel_size=3, padding=1),
+            torch.nn.ReLU(inplace=True),
+            torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            torch.nn.ReLU(inplace=True)
         )
 
     def forward(self, x_in: torch.Tensor, x_bridge: torch.Tensor):
@@ -192,18 +207,25 @@ class UNet(torch.nn.Module):
 
         self.conv_init = torch.nn.Sequential(
             # add proper layers here
+            torch.nn.Conv2d(n_ch_in, n_ch, kernel_size=3, padding=1),
+            torch.nn.ReLU(inplace=True),
+            torch.nn.Conv2d(n_ch, n_ch, kernel_size=3, padding=1),
+            torch.nn.ReLU(inplace=True),
+            torch.nn.Conv2d(n_ch, n_ch, kernel_size=3, padding=1),
+            torch.nn.ReLU(inplace=True)
         )
 
         self.down_blocks = torch.nn.ModuleList(
-            # add down-sampling blocks here
+            [UNetDownBlock(n_ch * (2 ** i), n_ch * (2 ** (i + 1))) for i in range(depth - 1)]
         )
 
         self.up_blocks = torch.nn.ModuleList(
-            # add up-sampling blocks here
+            [UNetUpBlock(n_ch * (2 ** i), n_ch * (2 ** (i - 1))) for i in range(depth - 1, 0, -1)]
         )
 
         self.conv_final = torch.nn.Sequential(
             # add proper layers here
+            torch.nn.Conv2d(n_ch, n_ch_out, kernel_size=1)
         )
 
     def forward(self, x_in):
@@ -212,6 +234,18 @@ class UNet(torch.nn.Module):
         """
 
         # connect the blocks here
+        x = self.conv_init(x_in)
+        x_bridges = []
+        x_bridges.append(x)
+        for i, down_block in enumerate(self.down_blocks):
+            x = down_block(x)
+            if i < self.depth - 2:
+                x_bridges.append(x)
+
+        for i, up_block in enumerate(self.up_blocks):
+            x = up_block(x, x_bridges[-(i + 1)])
+
+        x_in = self.conv_final(x)
 
         return x_in
 
@@ -236,8 +270,8 @@ class M2Trainer:
 
     def __init__(
         self,
-        path_gdth: str = "../dataset/trainingset_gdth",
-        path_dirty: str = "../dataset/ground_truth",
+        path_gdth: str = "../../dataset/trainingset_gdth",
+        path_dirty: str = "../../dataset/ground_truth",
         batch_size: int = 1,
         num_epochs: int = 50,
         n_ch_in: int = 1,
@@ -489,8 +523,8 @@ def parse_args():
 if __name__ == "__main__":
     # create the training set
     gen_backprojected_image(
-        path_gdth="../dataset/trainingset_gdth",
-        path_dirty="../dataset/trainingset_dirty",
+        path_gdth="../../training_set",
+        path_dirty="../../training_set_dirty",
         isnr=30,
     )
 
@@ -499,11 +533,13 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training using device: {device}")
     trainer = M2Trainer(
-        path_gdth="../dataset/trainingset_gdth",
-        path_dirty="../dataset/trainingset_dirty",
+        path_gdth="../../training_set",
+        path_dirty="../../training_set_dirty",
         num_epochs=2,
         verbose_interval=1,
         device=device,
+        depth=3,
+        verbose=False
     )
     trainer.train()
 
