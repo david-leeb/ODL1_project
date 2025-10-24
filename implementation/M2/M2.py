@@ -19,7 +19,7 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from M1 import create_meas_op, gen_noise, create_mask
+from implementation.M1.M1 import create_meas_op, gen_noise, create_mask
 
 # %% Section 1: Generate backprojected data
 

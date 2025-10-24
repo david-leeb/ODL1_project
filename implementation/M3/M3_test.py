@@ -10,7 +10,7 @@ from PIL import Image
 from torch import nn
 from torch.fft import fft2, fftshift, ifft2, ifftshift
 
-from M3_train import DnCNN
+from implementation.M3.M3_train import DnCNN
 
 # %% 4. M3 validation
 """

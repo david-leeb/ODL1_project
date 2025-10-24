@@ -1,0 +1,25 @@
+name: b31xo_cuda
+channels:
+- pytorch
+- conda-forge
+- defaults
+dependencies:
+- python=3.11
+- numpy=2.0.1
+- scipy=1.14.1
+- matplotlib=3.9.2
+- matplotlib-inline=0.1.6
+- pytorch=2.5.1
+- pytorch-cuda=12.4
+- torchvision=0.20.1=py311_cu124
+- torchaudio=2.5.1=py311_cu124
+- pywavelets=1.7.0
+- scikit-image
+- tqdm
+- notebook
+- ipykernel
+- ipywidgets
+- pandas
+- pip
+- pip:
+  - ptwt==0.1.9

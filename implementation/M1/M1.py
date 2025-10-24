@@ -350,7 +350,7 @@ def admm_conbpdn(
     """
 
     # initialisation
-    v = torch.zeros(np.shape(y))  # the dual variable
+    v = torch.zeros_like(y)  # the dual variable
     s = -y  # the intermediate variable
     n = proj_l2(s, epsilon)
     xsol = torch.zeros_like(Phi(s))
@@ -368,10 +368,15 @@ def admm_conbpdn(
         n = proj_l2(v - s, epsilon)
         v = v - (s + n)
         fval_old = fval
-        fval = torch.linalg.norm(Psit(xsol)[0], 1).item()
+        fval = torch.linalg.norm(xsol[0].squeeze(), 1)
+        for lev in xsol[1:]:
+            for sub in lev:
+                fval += torch.sum(torch.abs(sub))
         rel_fval = abs(fval - fval_old) / abs(fval)
-        n_t = np.linalg.norm(y - Phit(xsol), 2)
-        rel_x = np.linalg.norm(xsol - xsol_old, 2) / np.linalg.norm(xsol, 2)
+        # n_t = np.linalg.norm(y - Phit(xsol), 2)
+        # rel_x = np.linalg.norm(xsol - xsol_old, 2) / np.linalg.norm(xsol, 2)
+        n_t = torch.linalg.vector_norm(y - Phit(xsol), 2).item()
+        rel_x = (torch.linalg.vector_norm(xsol - xsol_old, 2) / torch.linalg.vector_norm(xsol, 2)).item()
         t += 1
         if rel_fval < rel_tol and n_t < epsilon or rel_x < rel_tol2:
             flag = 1
@@ -385,6 +390,65 @@ def admm_conbpdn(
             )
 
     return xsol, fval, t
+
+def run_admm(img_file, device, spread_spectrum=False, rho=1e2, rel_tol=1e-4, rel_tol2=1e-4, max_iter=200):
+    img = np.array(Image.open(img_file)).astype(np.float32)
+    img = torch.tensor(img, dtype=torch.float32, device=device)
+
+    # Create a Fourier mask
+    mask = create_mask(*img.shape).to(device)
+    
+    # Apply spread spectrum if required
+    if spread_spectrum:
+        # Create diagonal spread spectrum matrix D and measurement operators
+        D = 2 * (torch.rand(*img.shape, device=device).T < 0.5).to(dtype=img.dtype) - 1
+        Phit, Phi = create_spread_spectrum_meas_op(mask, D)
+    else:
+        Phit, Phi = create_meas_op(mask)
+
+    # Compute the measurements with forward measurement operator Phit
+    y0 = Phit(img)
+
+    # Compute noise given the image, mask, and iSNR
+    noise, sigma = gen_noise(img, mask)
+
+    # Add the noise to the measurements
+    y = y0 + noise
+    M = y.numel()
+
+    # Generate the sparsity operator
+    Psit, Psi = gen_sparsity_op()
+
+    # Get backprojected image
+    y_bp = Phi(y)
+
+    # For imposing the constraint on the data-fidelity term, you will use
+    # following value of the epsilon parameter.
+    epsilon = sigma * np.sqrt(M + 2 * np.sqrt(M))
+
+    # Reconstruct the image by calling our ADMM implementation
+    xsol, fval, it = admm_conbpdn(
+        y,
+        epsilon,
+        Phit,
+        Phi,
+        Psit,
+        Psi,
+        verbose=0,
+        rel_tol=rel_tol,
+        rel_tol2=rel_tol2,
+        max_iter=max_iter,
+        rho=rho,
+        delta=1.0,
+    )
+
+    # Calculate SNR and SSIM of the reconstructed image
+    xsol = xsol.cpu().numpy().squeeze()
+    img = img.cpu().numpy().squeeze()
+    snr = rsnr(xsol, img)
+    ssim = metrics.structural_similarity(img, xsol, data_range=(img.max() - img.min()).item())
+
+    return xsol, y_bp, snr, ssim
 
 # %% 4. M1 validation
 
@@ -414,7 +478,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load the testing set images
-    testing_set_dir = "../testing_set"
+    testing_set_dir = "../../testing_set"
     if not os.path.isdir(testing_set_dir):
         raise FileNotFoundError(f"Testing set directory not found: {testing_set_dir}")
     testing_files = [os.path.join(testing_set_dir, f) for f in os.listdir(testing_set_dir)]

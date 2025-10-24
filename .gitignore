@@ -3,3 +3,4 @@
 /training_set
 /__pycache__/
 *.pyc
+/implementation/sync
