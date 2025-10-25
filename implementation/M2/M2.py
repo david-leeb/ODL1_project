@@ -272,6 +272,7 @@ class M2Trainer:
         self,
         path_gdth: str = "../../dataset/trainingset_gdth",
         path_dirty: str = "../../dataset/ground_truth",
+        dataset_fraction: float = 1.0,
         batch_size: int = 1,
         num_epochs: int = 50,
         n_ch_in: int = 1,
@@ -298,6 +299,9 @@ class M2Trainer:
 
         # Load dataset into DataLoader
         _dataset = M2Dataset(path_gdth=path_gdth, path_dirty=path_dirty)
+        # Limit dataset size if fraction < 1.0
+        if dataset_fraction < 1.0:
+            _dataset = torch.utils.data.Subset(_dataset, indices=range(int(len(_dataset) * dataset_fraction)))
         # Split dataset into training and validation
         _train_dataset, _val_dataset = torch.utils.data.random_split(
             _dataset,
@@ -457,8 +461,15 @@ def parse_args():
     parser.add_argument(
         "--ground_truth_path",
         type=str,
-        default="data/ground_truth",
+        default="../../training_set",
         help="Path to ground truth data",
+    )
+    # Add option to specify fraction of dataset used for training and validation
+    parser.add_argument(
+        "--dataset_fraction",
+        type=float,
+        default=1.0,
+        help="Fraction of dataset to use for training and validation"
     )
     parser.add_argument(
         "--batch_size", type=int, default=1, help="Batch size for training"
@@ -483,7 +494,7 @@ def parse_args():
     parser.add_argument(
         "--model_save_path",
         type=str,
-        default="M2_trained_models",
+        default="../results/M2/models",
         help="Path to save model",
     )
     parser.add_argument(
@@ -535,6 +546,7 @@ if __name__ == "__main__":
     trainer = M2Trainer(
         path_gdth="../../training_set",
         path_dirty="../../training_set_dirty",
+        dataset_fraction=0.1,
         num_epochs=2,
         verbose_interval=1,
         device=device,
@@ -549,3 +561,6 @@ if __name__ == "__main__":
     model.load_state_dict(torch.load("./m2_models/model_epoch_2.ckpt", weights_only=True))
     model.to(device)
     # inference ...
+    model.eval()
+    
+
