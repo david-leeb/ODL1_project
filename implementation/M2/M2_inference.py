@@ -123,20 +123,18 @@ def run_inference(test_gdth, test_dirty, model_path, n_ch=64, depth=3, device=No
     return pd.DataFrame(results)
 
 def main():
-    """Main inference function"""
+    """Main inference function - measures pure inference time"""
     # Hardcoded parameters
-    test_gdth = "../../testing_set"
     test_dirty = "../../testing_set_dirty"
-    model_path = "../results/M2/models/debug/model_epoch_10.ckpt"
-    output_file = "../results/M2/inference_results.csv"
+    model_path = "../results/M2/models/default_bs16/model_epoch_50.ckpt"
+    output_file = "../results/M2/time_results.csv"
     n_ch = 64
     depth = 3
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     print("="*60)
-    print("M2 U-Net Inference")
+    print("M2 U-Net Inference Timing")
     print("="*60)
-    print(f"Test ground truth: {test_gdth}")
     print(f"Test dirty images: {test_dirty}")
     print(f"Model checkpoint: {model_path}")
     print(f"Network depth: {depth}, channels: {n_ch}")
@@ -149,14 +147,66 @@ def main():
         print("Please run M2_init.py first to generate backprojected images.")
         return
     
-    print(f"\nUsing backprojected images from {test_dirty}\n")
+    # Load model
+    print(f"\nLoading model...")
+    model = UNet(n_ch_in=1, n_ch_out=1, n_ch=n_ch, depth=depth)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+    print("Model loaded!")
     
-    # Run inference
-    df = run_inference(test_gdth, test_dirty, model_path, n_ch=n_ch, depth=depth, device=device, verbose=True)
+    # Get all test files
+    dirty_files = sorted(glob.glob(os.path.join(test_dirty, "*.tiff")))
+    print(f"Found {len(dirty_files)} test images")
     
-    # Create output directory if needed
+    # Warmup run
+    print("\nRunning warmup...")
+    dummy_dirty = np.array(Image.open(dirty_files[0])).astype(np.float32)
+    dummy_tensor = torch.tensor(dummy_dirty, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
+    with torch.no_grad():
+        _ = model(dummy_tensor)
+    print("Warmup complete!")
+    
+    # Run pure inference with timing
+    print("\nRunning inference loop...\n")
+    
+    results = []
+    with torch.no_grad():
+        for i, dirty_file in enumerate(dirty_files, 1):
+            # Load dirty image
+            dirty = np.array(Image.open(dirty_file)).astype(np.float32)
+            dirty_tensor = torch.tensor(dirty, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
+            
+            # Time individual inference
+            start_time = time.time()
+            _ = model(dirty_tensor)
+            elapsed_time = time.time() - start_time
+            
+            results.append({
+                'image': os.path.basename(dirty_file),
+                'time_seconds': elapsed_time
+            })
+            
+            if i % 5 == 0:
+                print(f"Processed {i}/{len(dirty_files)} images")
+    
+    # Convert to DataFrame and save
+    df = pd.DataFrame(results)
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     df.to_csv(output_file, index=False)
+    
+    # Print timing results
+    print("\n" + "="*60)
+    print("TIMING RESULTS")
+    print("="*60)
+    print(f"Results saved to: {output_file}")
+    print(f"\nTotal images: {len(df)}")
+    print(f"Total time: {df['time_seconds'].sum():.4f} seconds")
+    print(f"Average time per image: {df['time_seconds'].mean():.4f} ± {df['time_seconds'].std():.4f} seconds")
+    print(f"Min time: {df['time_seconds'].min():.4f} seconds")
+    print(f"Max time: {df['time_seconds'].max():.4f} seconds")
+    print(f"Throughput: {len(df)/df['time_seconds'].sum():.2f} images/second")
+    print("="*60)
 
 if __name__ == "__main__":
     main()

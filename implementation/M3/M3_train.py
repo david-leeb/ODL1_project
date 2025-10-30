@@ -2,6 +2,7 @@ import argparse
 import os
 import pathlib
 import pprint
+import glob
 
 import numpy as np
 import torch
@@ -45,14 +46,40 @@ then crop them randomly to the patch size
 
 """
 class M3Dataset(Dataset):
-    def __init__(self):
-        pass # TODO: Implement the M3Dataset class
-    
+    def __init__(self, ground_truth_path: str, sigma: float = 0.06,
+                 patch_size_x: int = 64, patch_size_y: int = 64,
+                 num_patches: int = 5):
+        # TODO: Implement the M3Dataset class
+        self._ground_truth_files = glob.glob(os.path.join(ground_truth_path, "*.tiff"))
+        self.sigma = sigma
+        self.patch_size_x = patch_size_x
+        self.patch_size_y = patch_size_y
+        self.num_patches = num_patches
+
     def __len__(self):
-        pass
-    
+        return len(self._ground_truth_files) * self.num_patches
+
     def __getitem__(self, i):
-        pass
+        # Map index to actual image file 
+        img_idx = i // self.num_patches
+        
+        # Load ground truth image
+        gt_img = np.array(Image.open(self._ground_truth_files[img_idx])).astype(np.float32)
+        gt_img = torch.tensor(gt_img, dtype=torch.float32).unsqueeze(0)
+        
+        # Initialize random crop transform and get patch
+        transform = v2.RandomCrop((self.patch_size_y, self.patch_size_x))
+        gt_patch = transform(gt_img)
+        
+        # Add noise to patch
+        noisy_patch = add_noise(gt_patch, self.sigma)
+        
+        data = {
+            "ground_truth": gt_patch,
+            "noisy": noisy_patch
+        }
+        
+        return data
 
 # %% 2. DnCNN architecture and implementation
 """
@@ -87,7 +114,9 @@ class DnCNN(nn.Module):
         self.in_conv = nn.Conv2d(self.n_ch_in, self.n_ch, kernel_size=3, stride=1, padding=1, bias=True)
 
         # TODO: Implement the missing DnCNN layers
-        # self.conv_list =
+        self.conv_list = nn.ModuleList()
+        for _ in range(self.depth - 2):
+            self.conv_list.append(nn.Conv2d(self.n_ch, self.n_ch, kernel_size=3, stride=1, padding=1, bias=True))
 
         self.out_conv = nn.Conv2d(self.n_ch, self.n_ch_out, kernel_size=3, stride=1, padding=1, bias=True)
 
@@ -101,9 +130,12 @@ class DnCNN(nn.Module):
         x_out = self.relu_list[0](x_out)
 
         # TODO: Implement the forward function for the missing DnCNN layers
+        for i in range(self.depth - 2):
+            x_out = self.conv_list[i](x_out)
+            x_out = self.relu_list[i + 1](x_out)
         
         # TODO: Implement the skip connection
-        # x_out = 
+        x_out = x_out + self.in_conv(x_in)
         x_out = self.relu_list[-1](x_out)
 
         return x_out
@@ -176,16 +208,27 @@ class M3Trainer:
         self._device = device
         self._model_save_path = model_save_path
         self._model_save_interval = model_save_interval
+        self._sigma = sigma
+        self._patch_size_x = patch_size_x
+        self._patch_size_y = patch_size_y
+        self._num_patches = num_patches
         if not os.path.exists(model_save_path):
             os.makedirs(model_save_path)
 
         # Load dataset into DataLoader
         # TODO: Define M3Dataset
-        _dataset = M3Dataset()
-        
-        
+        _dataset = M3Dataset(
+            ground_truth_path=self._ground_truth_path,
+            sigma=self._sigma,
+            patch_size_x=self._patch_size_x,
+            patch_size_y=self._patch_size_y,
+            num_patches=self._num_patches
+        )
+
         # TODO: Split dataset into training and validation
-        # _train_dataset, _val_dataset =
+        _train_dataset, _val_dataset = torch.utils.data.random_split(
+            _dataset, [int(np.floor(0.8 * len(_dataset))), len(_dataset) - int(np.floor(0.8 * len(_dataset)))]
+        )
 
         # Create DataLoaders for training and validation
         self._train_data_loader = DataLoader(dataset=_train_dataset, batch_size=batch_size, shuffle=True)
@@ -199,7 +242,7 @@ class M3Trainer:
 
         # set up optimiser
         # TODO: define optimiser
-        # self._optimiser = 
+        self._optimiser = torch.optim.Adam(self._model.parameters(), lr=lr_init)
 
     def loss(self, output, target):
         # TODO: define loss function
